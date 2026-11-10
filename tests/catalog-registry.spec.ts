@@ -18,6 +18,7 @@
  */
 
 import { createServer, type Server } from 'node:http'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { catalogFromRegistry } from '../src/catalog-registry.ts'
 import { setOfflineMode } from '../src/offline.ts'
@@ -273,6 +274,8 @@ describe('intranet mode points the catalog at the registry', () => {
   it('lets an explicit catalog win over the registry listing', () => {
     setOfflineMode(true)
     setConfiguredCatalog('/opt/dsh/plugins.json')
-    expect(routesFor('global', {}).catalog).toEqual([{ kind: 'file', path: '/opt/dsh/plugins.json' }])
+    // Absolute the way this platform spells it — the assertion is about which
+    // source wins, not about which slash the runner uses.
+    expect(routesFor('global', {}).catalog).toEqual([{ kind: 'file', path: resolve('/opt/dsh/plugins.json') }])
   })
 })
