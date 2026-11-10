@@ -29,7 +29,10 @@ export const name = 'dsh-market'
 const PENDING_UPDATE_REPAIR_DELAY_MS = 8_000
 
 /** Optional cordis.yml configuration; profile defaults to `web`. */
-export type Config = Partial<Pick<MarketConfig, 'profile' | 'allowRestart' | 'maxSnapshots' | 'buildEnv'>>
+export type Config = Partial<Pick<
+  MarketConfig,
+  'profile' | 'allowRestart' | 'maxSnapshots' | 'buildEnv' | 'npmRegistry' | 'offline' | 'catalog' | 'plugins'
+>>
 
 /**
  * Structural subset of the dsh launcher's public `profileContext` service —
@@ -339,6 +342,14 @@ export function apply(ctx: Context, config?: Config): void {
           desktopHost: true,
           allowRestart: false,
           maxSnapshots: config?.maxSnapshots,
+          // Where packages come from, on a network that serves them itself.
+          // Copied here for the same reason `buildEnv` was #527's miss: a
+          // configured option that no construction site forwards is an option
+          // the operator sets and nothing ever reads.
+          npmRegistry: config?.npmRegistry,
+          offline: config?.offline,
+          catalog: config?.catalog,
+          plugins: config?.plugins,
           // The third construction site, and the one #527's review caught
           // missing: a `buildEnv` configured in cordis.yml was silently
           // dropped on the official desktop host — the very host the feature
@@ -392,6 +403,12 @@ export function apply(ctx: Context, config?: Config): void {
         // is exactly the distinction supervisor detection needs (#229).
         allowRestart: config?.allowRestart,
         maxSnapshots: config?.maxSnapshots,
+        // The npm registry this network serves. Same forwarding rule as the
+        // desktop branch above; see `MarketConfig.npmRegistry`.
+        npmRegistry: config?.npmRegistry,
+        offline: config?.offline,
+        catalog: config?.catalog,
+        plugins: config?.plugins,
         // Build-time environment (#336); undefined means "inherit", and the
         // settings wiring below is what makes it editable at runtime.
         buildEnv: config?.buildEnv,
@@ -438,6 +455,13 @@ export function apply(ctx: Context, config?: Config): void {
         // lifecycle. The shell remains responsible for restart in this mode.
         allowRestart: false,
         maxSnapshots: config?.maxSnapshots,
+        // Same forwarding rule as the other two branches: this is the branch
+        // Desktop actually takes, so an internal registry has to reach here or
+        // it reaches nowhere.
+        npmRegistry: config?.npmRegistry,
+        offline: config?.offline,
+        catalog: config?.catalog,
+        plugins: config?.plugins,
         // The operator's pinned build environment applies in Desktop mode
         // too: Desktop's packaged pnpm still runs plugin build scripts.
         buildEnv: config?.buildEnv,

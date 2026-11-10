@@ -17,7 +17,17 @@
  * (src/registry.ts). The China route has service-specific public-proxy
  * fallbacks; those come and go, and a user whose routes have died needs a way
  * out that is not "wait for the next release".
+ *
+ * Two things here are the intranet deployment rather than the internet one:
+ * an operator-named registry (`setConfiguredNpmRegistry`) and an
+ * operator-named catalog (`setConfiguredCatalog`). Both exist because the
+ * region table's own answers are, by construction, public hosts — and a
+ * network that has none of them cannot be served by a table it cannot edit.
  */
+
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { offlineMode, offlineReachable } from './offline.ts'
 
 /** A region the market can download from. */
 export type Region = 'global' | 'china'
@@ -38,6 +48,24 @@ export function asRegion(value: unknown): Region | null {
  * pnpm's registry alone and setting it.
  */
 export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
+/**
+ * The registry an intranet deployment serves plugins from, no trailing slash.
+ *
+ * This is the address the offline bundle's own registry listens on
+ * (`Start-offline-registry.cmd` in the Windows bundle, `serve.mjs` in the
+ * bundle's root). It is a DEFAULT, not a policy: it
+ * only applies in intranet mode and only when nothing else named a registry,
+ * and it is loopback, so a wrong guess costs one refused connection on this
+ * machine rather than a request leaving the network.
+ *
+ * Without it, `offline: true` alone would leave the market pointed at
+ * registry.npmjs.org — blocked by the fence, so the market would boot with no
+ * catalog and no way to install anything, while the machine running it hosts
+ * a registry one configuration line away. The failure would be correct and
+ * useless; naming the conventional address makes the switch alone enough for
+ * the deployment this mode exists for.
+ */
+export const OFFLINE_DEFAULT_REGISTRY = 'http://127.0.0.1:4873'
 /**
  * Default npm registry for the China download region, no trailing slash.
  *
@@ -110,6 +138,31 @@ const CATALOG_OFFICIAL = 'https://awesome-dsh-plugin.com/plugins.json'
 export type CatalogSource =
   | { kind: 'url'; url: string }
   | { kind: 'npm'; registry: string; pkg: string }
+  /**
+   * A catalog file on this machine — the air-gapped answer.
+   *
+   * An intranet that serves no HTTP at all still has a file share, and a
+   * deployment that would rather not run a web server for one JSON document
+   * can drop `plugins.json` next to the profile and name it here. Read on
+   * every load, like the networked sources: a stale allowance is worse than
+   * a missing one, because it silently withdraws plugins the operator
+   * published this morning.
+   */
+  | { kind: 'file'; path: string }
+  /**
+   * The registry itself, read as a listing.
+   *
+   * An intranet registry is already the authoritative list of what its
+   * network can install: publishing a plugin there IS the act of making it
+   * available. Reading a separate document alongside it means the document
+   * has to be kept in step by hand, and it goes stale exactly when someone
+   * publishes without remembering to. See `src/catalog-registry.ts`.
+   *
+   * `names` is the operator's own statement of which packages are plugins,
+   * and it turns the `dsh`-field filter off: a source that was told what it
+   * holds should not second-guess the answer.
+   */
+  | { kind: 'registry'; registry: string; names: string[] | null }
 
 /** Where one region sends each kind of request. `null` means "go direct". */
 export interface RegionRoutes {
@@ -199,6 +252,15 @@ const ROUTES: Record<Region, RegionRoutes> = {
 export function catalogSourcesFor(region: Region): CatalogSource[] {
   const routes = routesFor(region)
   const sources = [...routes.catalog]
+  // Intranet mode: no source list may grow a fallback that is a public host.
+  // Every addition below is one — a filed public origin, npm's own registry,
+  // a second China mirror — and each would be attempted before it could
+  // report the only fact worth reporting, which is that the operator's own
+  // catalog did not answer. A `file:` source is kept: it is the one kind that
+  // cannot be unreachable.
+  if (offlineMode()) {
+    return sources.filter(source => source.kind !== 'url' || offlineReachable(source.url))
+  }
   const served = sources.some(source => source.kind === 'npm'
     && source.registry === routes.npmRegistry && source.pkg === CATALOG_PACKAGE)
   if (!served) sources.push({ kind: 'npm', registry: routes.npmRegistry, pkg: CATALOG_PACKAGE })
@@ -222,6 +284,155 @@ export function catalogSourcesFor(region: Region): CatalogSource[] {
 function override(env: NodeJS.ProcessEnv, name: string): string | null {
   const raw = env[name]
   return raw !== undefined && raw.trim() !== '' ? raw.trim().replace(/\/+$/, '') : null
+}
+
+/**
+ * Normalize an npm registry the operator named, or reject it.
+ *
+ * Everything else in this module is built by appending to this base —
+ * `/pkg/latest`, `/pkg/-/pkg-1.0.0.tgz`, the catalog package — so a value that
+ * is not a plain base URL produces addresses that cannot be formed at all.
+ * Credentials, a query or a fragment are refused for the same reason the
+ * GitHub proxy refuses them: the result is persisted and shown back, and a
+ * token has no business in either.
+ *
+ * HTTP is allowed on purpose. An internal registry on a trusted network is
+ * routinely plain HTTP (`http://127.0.0.1:4873` is Verdaccio's default), and
+ * demanding TLS here would rule out the one deployment this setting exists
+ * for while protecting nothing on a network that already trusted the hop.
+ */
+export function normalizeNpmRegistry(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (raw === '' || raw.includes('\\')) return null
+  try {
+    const parsed = new URL(raw)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+    if (parsed.username !== '' || parsed.password !== '') return null
+    if (parsed.search !== '' || parsed.hash !== '') return null
+    const path = parsed.pathname.replace(/\/+$/u, '')
+    return `${parsed.origin}${path}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The registry the composition named, or null for the region's own table.
+ *
+ * Module state for the same reason `activeRegion` is: every consumer asks
+ * `routesFor`, several frames deep, and threading one more parameter through
+ * the catalog, the update checker and every pnpm spawn would buy nothing.
+ */
+let configuredRegistry: string | null = null
+
+/**
+ * Point every route at an operator-named npm registry, or clear it.
+ *
+ * This is the composition's `npmRegistry:` option, and it exists because an
+ * internal network has no use for the public table: the global entry is npm
+ * itself and the China entry is a public mirror, so neither is reachable and
+ * neither can be edited from where the operator sits. `DSHM_NPM_MIRROR` still
+ * wins over this, being the escape hatch someone reaches for when the profile
+ * file is the thing they cannot edit right now.
+ *
+ * An unparseable value is dropped rather than thrown: a typo must not stop the
+ * market from booting, and the region table is exactly the sane fallback.
+ */
+export function setConfiguredNpmRegistry(value: unknown): void {
+  configuredRegistry = normalizeNpmRegistry(value)
+}
+
+/**
+ * The catalog the composition named, or null for the region's own list.
+ *
+ * Beside `configuredRegistry` and for the same reason: every reader asks
+ * `routesFor`, and a deployment that has no use for the public catalog has to
+ * be able to say so once.
+ */
+let configuredCatalog: CatalogSource | null = null
+
+/**
+ * The plugin names the composition named, or null to ask the registry.
+ *
+ * Only consulted when a catalog is being read out of a registry: everywhere
+ * else the catalog document already states what it holds.
+ */
+let configuredPlugins: string[] | null = null
+
+/**
+ * Name the packages that ARE plugins, for a registry read as a catalog.
+ *
+ * The registry cannot tell a plugin from a library — both are packages. The
+ * `dsh` field does that job for every plugin published today, and this
+ * option exists for the deployment whose plugins predate it, or whose
+ * packaging pipeline strips it. Stating the list also states the ORDER, and
+ * an empty list is treated as "no statement" rather than "no plugins",
+ * because an empty option is much more likely to be an unfinished edit than
+ * a request for an empty market.
+ */
+export function setConfiguredPlugins(value: unknown): void {
+  if (!Array.isArray(value)) {
+    configuredPlugins = null
+    return
+  }
+  const names = value
+    .filter((name): name is string => typeof name === 'string')
+    .map(name => name.trim())
+    .filter(name => name !== '')
+  configuredPlugins = names.length === 0 ? null : names
+}
+
+/**
+ * Read a catalog location the operator named: an http(s) URL, or a file path.
+ *
+ * One option rather than two, because the two are the same decision — "the
+ * catalog is here" — and an operator who has to choose between `catalogUrl:`
+ * and `catalogFile:` is being asked which transport their own network has,
+ * which they know and the schema should not require them to spell.
+ *
+ * A file path is resolved against the process's working directory, and is
+ * normalized rather than checked: the file may legitimately appear after
+ * boot (an ops job drops it), and refusing the whole mount over a typo in a
+ * path would take the market down instead of reporting one failed source.
+ */
+export function normalizeCatalogSource(value: unknown): CatalogSource | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (raw === '' || raw.includes('\0')) return null
+  if (/^https?:\/\//iu.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      if (parsed.username !== '' || parsed.password !== '') return null
+      if (parsed.search !== '' || parsed.hash !== '') return null
+      return { kind: 'url', url: parsed.toString() }
+    } catch {
+      return null
+    }
+  }
+  // Anything else is a path. `file://` is accepted because that is how the
+  // same location is written everywhere else an operator meets a URL, and
+  // being refused for the spelling would be a puzzle rather than a message.
+  if (/^file:\/\//iu.test(raw)) {
+    try {
+      return { kind: 'file', path: fileURLToPath(raw) }
+    } catch {
+      return null
+    }
+  }
+  if (/^[a-z][a-z\d+.-]*:\/\//iu.test(raw)) return null
+  return { kind: 'file', path: resolve(raw) }
+}
+
+/**
+ * Point the catalog at the operator's own location, or clear it.
+ *
+ * Takes either spelling — the raw value from the composition, or a source
+ * that was already normalized (the mount validates once, so that a bad value
+ * can be reported instead of silently disappearing).
+ */
+export function setConfiguredCatalog(value: CatalogSource | string | null): void {
+  configuredCatalog = typeof value === 'string' ? normalizeCatalogSource(value) : value
 }
 
 /**
@@ -311,7 +522,12 @@ export function routesFor(region: Region, env: NodeJS.ProcessEnv = process.env):
   const npmMirror = override(env, 'DSHM_NPM_MIRROR')
   const githubProxy = override(env, 'DSHM_GITHUB_PROXY') ?? customGithubProxy
   const catalog = override(env, 'DSHM_REGISTRY_URL')
-  const registry = npmMirror ?? base.npmRegistry
+  const offline = offlineMode()
+  // In intranet mode an unnamed registry is the address the offline bundle
+  // listens on, not npm's: the public one is blocked by the fence, so falling
+  // back to it guarantees a market with nothing in it. Everything that names
+  // a registry still wins (env, then the composition).
+  const registry = npmMirror ?? configuredRegistry ?? (offline ? OFFLINE_DEFAULT_REGISTRY : base.npmRegistry)
   const githubRoutes: GithubRoutes = githubProxy === null
     ? {
         git: [...base.githubRoutes.git],
@@ -325,18 +541,57 @@ export function routesFor(region: Region, env: NodeJS.ProcessEnv = process.env):
       }
   return {
     npmRegistry: registry,
-    githubProxy: githubProxy ?? base.githubProxy,
-    githubRoutes,
+    // No GitHub route survives intranet mode. It is not a preference: every
+    // candidate in every list is a public host, so an empty list is the
+    // honest answer, and it is also the one that keeps a caller from
+    // reporting "all routes failed" for a network where no route exists.
+    githubProxy: offline ? null : githubProxy ?? base.githubProxy,
+    githubRoutes: offline ? { git: [], raw: [], avatar: [] } : githubRoutes,
     // A named catalog REPLACES the list rather than joining it. Someone
     // pointing the market at their own catalog does not want it quietly
     // reverting to ours when theirs is briefly unreachable — that is how a
     // fixture-backed test ends up asserting against the live registry.
     catalog: catalog !== null
       ? [{ kind: 'url', url: catalog }]
-      // Rebuilt against the resolved registry, so an npm override moves the
-      // catalog to the same mirror it moved everything else to.
-      : base.catalog.map(source => (source.kind === 'npm' ? { ...source, registry } : source)),
+      // The operator's own location, for exactly the same reason and with the
+      // same finality: it is the only source, because falling back to the
+      // public catalog is the timeout offline mode exists to remove.
+      : configuredCatalog !== null
+        ? [configuredCatalog]
+        // Intranet mode with no catalog stated: the registry IS the listing.
+        // This is the answer that needs no second document to maintain —
+        // whatever has been published is what the market shows, version and
+        // description included, because they are read from the packages
+        // themselves rather than from a file describing them.
+        : offline
+          ? [{ kind: 'registry', registry, names: configuredPlugins }]
+          // Rebuilt against the resolved registry, so an npm override moves
+          // the catalog to the same mirror it moved everything else to.
+          : catalogForRegistry(base.catalog, registry, npmMirror === null && configuredRegistry !== null),
   }
+}
+
+/**
+ * The catalog list for a registry.
+ *
+ * `preferPackage` puts the registry's own copy of the catalog in FRONT, and it
+ * is only true for a registry the composition named. The difference is what
+ * the two mechanisms mean: `DSHM_NPM_MIRROR` is the escape hatch someone
+ * reaches for when a public host is slow or down, on a machine that still has
+ * the origin — for them the origin stays first, as it always has (#891). A
+ * registry in the composition says something stronger, that THIS network
+ * serves packages and the public hosts are not on it, so a first request to
+ * `awesome-dsh-plugin.com` can only time out before the source that answers.
+ * Same routing either way; only the order of the first request changes.
+ *
+ * The table is left alone when the registry is the default one: the public
+ * list was written for exactly that case.
+ */
+function catalogForRegistry(base: CatalogSource[], registry: string, preferPackage: boolean): CatalogSource[] {
+  const mapped = base.map(source => (source.kind === 'npm' ? { ...source, registry } : source))
+  if (registry === DEFAULT_NPM_REGISTRY) return mapped
+  if (mapped.some(source => source.kind === 'npm' && source.registry === registry)) return mapped
+  return preferPackage ? [{ kind: 'npm', registry, pkg: CATALOG_PACKAGE }, ...mapped] : mapped
 }
 
 /** Ordered candidates with this process's last verified winner first. */

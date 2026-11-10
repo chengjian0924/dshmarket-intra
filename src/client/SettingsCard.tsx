@@ -88,6 +88,11 @@ interface SelfStatus {
   githubProxyCustom: string | null
   /** Environment-owned prefixes are visible but not editable. */
   githubProxyManaged: boolean
+  /**
+   * Intranet mode (composition `offline: true`). The card withholds the
+   * controls whose only choices are public routes, and says why.
+   */
+  offline: boolean
   /** Whether the profile package manager owns this market installation. */
   selfManaged: boolean
   /**
@@ -115,6 +120,7 @@ interface StatusBody {
   githubProxyCustom?: string | null
   githubProxyManaged?: boolean
   selfManaged?: boolean
+  offline?: boolean
   buildEnv?: Record<string, string>
 }
 
@@ -182,6 +188,7 @@ function readStatus(body: StatusBody): SelfStatus {
     githubProxyCustom: typeof body.githubProxyCustom === 'string' ? body.githubProxyCustom : null,
     githubProxyManaged: body.githubProxyManaged === true,
     selfManaged: body.selfManaged !== false,
+    offline: body.offline === true,
     selfUninstallReachable: body.selfUninstallReachable !== false,
     buildEnv: body.buildEnv ?? {},
   }
@@ -315,7 +322,7 @@ export function SettingsCard({ t, onRemoved, sidebar, entries }: SettingsCardPro
           setStatus({
             version: null, restart: false, channel: 'stable', channels: ['stable', 'beta'],
             region: 'global', regions: REGIONS, regionAuto: false,
-            githubProxyCustom: null, githubProxyManaged: false, selfManaged: true, selfUninstallReachable: true, buildEnv: {},
+            githubProxyCustom: null, githubProxyManaged: false, selfManaged: true, offline: false, selfUninstallReachable: true, buildEnv: {},
           })
         }
       }
@@ -648,7 +655,9 @@ export function SettingsCard({ t, onRemoved, sidebar, entries }: SettingsCardPro
         // Where the same catalog is reachable on a host that reads market
         // indexes (dsh 0.2.1+): a statement, not an action — the address is
         // the whole thing the user needs, and it stays selectable here.
-        row(t('setIndexSource'), t('setIndexSourceHint'), null),
+        // Withheld on an intranet: the address it names is a public CDN the
+        // host on that network cannot reach either.
+        status?.offline === true ? null : row(t('setIndexSource'), t('setIndexSourceHint'), null),
         status?.selfManaged === true ? row(
           // An older offer is not an update, and calling it one would have
           // the user click "更新" to go backwards. It IS what picking an
@@ -717,7 +726,12 @@ export function SettingsCard({ t, onRemoved, sidebar, entries }: SettingsCardPro
           )) : null,
         // Getting plugins at all is the market's job; the channel above is
         // which build of the market itself arrives.
-        row(
+        //
+        // Both controls below choose between PUBLIC routes, and an intranet
+        // has neither: its registry is pinned in the profile and its GitHub
+        // routes are empty. Offering a choice that changes nothing reads as a
+        // setting that failed to apply, so they are absent rather than inert.
+        status?.offline === true ? null : row(
           t('setRegion'),
           // The hint carries the explanation of an automatic choice when
           // there is one to make, and the plain description of the selected
@@ -736,7 +750,7 @@ export function SettingsCard({ t, onRemoved, sidebar, entries }: SettingsCardPro
               onClick: () => { onRegion(id) },
             }, t(REGION_LABEL[id]))),
           )),
-        row(
+        status?.offline === true ? null : row(
           t('setGithubProxy'),
           status?.githubProxyManaged === true
             ? t('setGithubProxyManagedHint')

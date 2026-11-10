@@ -10,8 +10,9 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  activeRegion, asRegion, catalogSourcesFor, DEFAULT_NPM_REGISTRY, githubRoutesFor, REGIONS, rememberGithubRoute,
-  resetGithubRoutePreferences, routesFor, setActiveRegion, setCustomGithubProxy, throughProxy,
+  activeRegion, asRegion, catalogSourcesFor, DEFAULT_NPM_REGISTRY, githubRoutesFor, normalizeNpmRegistry,
+  REGIONS, rememberGithubRoute, resetGithubRoutePreferences, routesFor, setActiveRegion,
+  setConfiguredNpmRegistry, setCustomGithubProxy, throughProxy,
 } from '../src/regions.ts'
 import { codeloadAllowBuildsKey, codeloadTarball, githubCommitOfTarget, gitAllowBuildsKey, githubRepoOfRemote, pinnedAllowBuildsKeys, pinnedGitAllowBuildsKey, repoOfTarget } from '../src/sources.ts'
 import { githubProxyInUse, githubUrl, setGithubProxy } from '../src/client/market-data.ts'
@@ -22,6 +23,7 @@ afterEach(() => {
   setActiveRegion('global')
   setCustomGithubProxy(null)
   resetGithubRoutePreferences()
+  setConfiguredNpmRegistry(null)
 })
 
 describe('asRegion', () => {
@@ -132,6 +134,35 @@ describe('routesFor', () => {
     expect(routes.catalog[0]).toEqual({ kind: 'npm', registry: 'https://npm.internal', pkg: 'dsh-plugin-catalog' })
   })
 
+  it('asks a registry named in the composition for the catalog first', () => {
+    // The region table's two entries are npm itself and a public mirror. A
+    // network that serves neither says so once, in the profile — and on that
+    // network the public origin is a host that can only time out, which is why
+    // it stops leading the FIRST request the market makes at boot.
+    setConfiguredNpmRegistry('http://127.0.0.1:4873/')
+    try {
+      const routes = routesFor('global', {})
+      expect(routes.npmRegistry).toBe('http://127.0.0.1:4873')
+      expect(routes.catalog[0]).toEqual(
+        { kind: 'npm', registry: 'http://127.0.0.1:4873', pkg: 'dsh-plugin-catalog' })
+      // Kept as the last fallback rather than dropped: a registry with no
+      // catalog package yet still has to be survivable.
+      expect(routes.catalog.at(-1)).toEqual({ kind: 'url', url: expect.stringContaining('awesome-dsh-plugin.com') })
+    } finally {
+      setConfiguredNpmRegistry(null)
+    }
+  })
+
+  it('lets the environment outrank the composition, so a stale profile file is not a trap', () => {
+    setConfiguredNpmRegistry('http://127.0.0.1:4873')
+    try {
+      expect(routesFor('global', { DSHM_NPM_MIRROR: 'https://npm.internal' }).npmRegistry)
+        .toBe('https://npm.internal')
+    } finally {
+      setConfiguredNpmRegistry(null)
+    }
+  })
+
   it('lets the environment override each route', () => {
     const routes = routesFor('china', {
       DSHM_NPM_MIRROR: 'https://npm.internal/',
@@ -198,6 +229,38 @@ describe('routesFor', () => {
   it('ignores blank overrides', () => {
     const routes = routesFor('china', { DSHM_NPM_MIRROR: '   ' })
     expect(routes.npmRegistry).toBe(routesFor('china', {}).npmRegistry)
+  })
+})
+
+describe('normalizeNpmRegistry', () => {
+  it('keeps an internal base URL, plain HTTP included', () => {
+    // Verdaccio's default address is exactly this shape and it is the case the
+    // setting exists for, so refusing http here would refuse the deployment.
+    expect(normalizeNpmRegistry(' http://127.0.0.1:4873/ ')).toBe('http://127.0.0.1:4873')
+    expect(normalizeNpmRegistry('https://npm.corp/npm/')).toBe('https://npm.corp/npm')
+  })
+
+  it('refuses anything that cannot be appended to', () => {
+    // Every request is built by joining this base: a scheme-less value, a
+    // credential, a query, or a fragment produces addresses that do not exist.
+    expect(normalizeNpmRegistry('127.0.0.1:4873')).toBeNull()
+    expect(normalizeNpmRegistry('ftp://npm.corp')).toBeNull()
+    expect(normalizeNpmRegistry('https://user:token@npm.corp')).toBeNull()
+    expect(normalizeNpmRegistry('https://npm.corp/?token=1')).toBeNull()
+    expect(normalizeNpmRegistry('https://npm.corp/#x')).toBeNull()
+    expect(normalizeNpmRegistry('')).toBeNull()
+    expect(normalizeNpmRegistry(undefined)).toBeNull()
+    expect(normalizeNpmRegistry({ registry: 'http://127.0.0.1:4873' })).toBeNull()
+  })
+
+  it('leaves the region table in charge when the configured value is unusable', () => {
+    // A typo costs the operator their registry, not the market's boot.
+    setConfiguredNpmRegistry('npm.internal/registry')
+    try {
+      expect(routesFor('global', {}).npmRegistry).toBe(DEFAULT_NPM_REGISTRY)
+    } finally {
+      setConfiguredNpmRegistry(null)
+    }
   })
 })
 

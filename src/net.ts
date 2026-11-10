@@ -31,6 +31,7 @@
  */
 
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch } from 'undici'
+import { assertOfflineReachable } from './offline.ts'
 
 /**
  * Hand the host's own undici the dispatcher our import took (#861).
@@ -136,6 +137,31 @@ export async function marketFetch(
   url: string,
   init?: { signal?: AbortSignal; headers?: Record<string, string>; method?: 'GET' | 'HEAD'; redirect?: 'follow' | 'manual' },
 ): Promise<Response> {
+  // The one gate in front of every request this module makes, and therefore
+  // in front of every public host the market knows: in intranet mode a
+  // blocked host fails here, synchronously, instead of spending its timeout
+  // budget and reporting a network error nobody can act on. Deliberately the
+  // last statement before dispatch rather than a check at each call site —
+  // there are two dozen call sites and one of them would eventually be
+  // missed, which is precisely the bug that would be hardest to notice.
+  assertOfflineReachable(url)
+  // A service on this machine is not behind the machine's proxy.
+  //
+  // The intranet deployment this market now supports serves its registry on
+  // loopback (the offline bundle's `127.0.0.1:4873`), and a workstation that
+  // has `HTTP_PROXY` set — which every Windows desktop with a corporate
+  // agent does — sent the market's own catalog request through the proxy and
+  // got back the proxy's 502 instead of the registry's answer. The retry
+  // below would have recovered it, one round trip later and with an error in
+  // the log that names a host nobody configured.
+  //
+  // Loopback only: an intranet registry at a real hostname may legitimately
+  // need the proxy that reaches the rest of the network, and guessing wrong
+  // there breaks a deployment that works.
+  if (isLoopbackUrl(url)) {
+    directAgent ??= new Agent()
+    return await undiciFetch(url, { ...init, dispatcher: directAgent }) as unknown as Response
+  }
   const { http, https } = proxyFromEnv()
   if (http === null && https === null) {
     directAgent ??= new Agent()
@@ -178,6 +204,28 @@ function isLoopbackProxy(proxy: string | null): boolean {
   try {
     const host = new URL(proxy).hostname.replace(/^\[|\]$/gu, '')
     return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a URL addresses this machine.
+ *
+ * Used to skip the proxy for a registry the deployment runs locally: the
+ * request never leaves the host, so a proxy can only add a hop that is
+ * entitled to refuse it — and the loopback proxy the Desktop host runs does
+ * exactly that for hosts outside its allowlist.
+ *
+ * The whole `127.0.0.0/8` block counts, not just `127.0.0.1`: the bundle's
+ * port is configurable, and `127.0.0.2` is still this machine.
+ */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/gu, '')
+    if (host === 'localhost' || host === '::1' || host.endsWith('.localhost')) return true
+    const v4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u
+    return v4.test(host)
   } catch {
     return false
   }

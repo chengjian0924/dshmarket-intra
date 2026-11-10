@@ -55,7 +55,7 @@ import type { SidebarEntry } from './sidebar-entry.ts'
 import {
   installCommandFor, hostCompatibilityKey,
   api, applyGithubRouting, avatarColor, catalogEntryForInstalled, entryForDep, failureText, githubRouteCandidates, groupSwitchState, installedForCatalog, isGenerationSpec, isInstalled, localizeBilingual, localizeBilingualList, looksTerminal, matchInstalledName, orderedCategories, pluginCategories,
-  formatCount, pageItems, pluginName, blockAliases, pluginScreenshotCandidates, pluginScreenshots, pluginsForFavorites, previewDimensionScore, queuedRowApplies, rankThemeScreenshots, readSession, safeIcon, releaseNotesHttpsImage, rememberGithubRoute, resetScreenshotsCache, resolveCatalogRestore, safeScreenshots, sanitizeReleaseNotesBody, staleFavoriteUrls, themePlugins as themePluginsOf, themeSwatch, TIME_RANGE_DAYS, visiblePlugins, restartHintKey,
+  formatCount, pageItems, pluginName, blockAliases, pluginScreenshotCandidates, pluginScreenshots, pluginsForFavorites, previewDimensionScore, queuedRowApplies, rankThemeScreenshots, readSession, safeIcon, releaseNotesHttpsImage, rememberGithubRoute, resetScreenshotsCache, resolveCatalogRestore, safeScreenshots, sanitizeReleaseNotesBody, staleFavoriteUrls, themePlugins as themePluginsOf, themeSwatch, TIME_RANGE_DAYS, visiblePlugins, restartHintKey, marketOffline, setMarketOffline,
 } from './market-data.ts'
 import type {
 ActivationInfo, ActivationState, DrainHistoryWire, DrainOperationWire, GistExportResult, InstalledMap, InstalledRepoHints, InstalledRepoIdentities, MarketStatus, Registry, RegistryPlugin,
@@ -475,6 +475,11 @@ function mdInline(text: string): Array<string | JSX.Element> {
  */
 export function GithubRoutedImg({ src, alt, className, key }: { src: string; alt: string; className?: string; key?: string }) {
   const [routeIndex, setRouteIndex] = useState(0)
+  // Release notes are markdown from a GitHub release body; on an intranet
+  // every image in them is unreachable, and an <img> pointed at a host that
+  // does not answer leaves a blank box the reader cannot explain. Nothing is
+  // the honest render.
+  if (marketOffline()) return null
   const candidates = githubRouteCandidates('raw', src)
   const candidate = candidates[Math.min(routeIndex, candidates.length - 1)]!
   return (
@@ -566,7 +571,12 @@ export function OwnerAvatar({ name, owner, icon, className }: { name: string; ow
   const [iconFailed, setIconFailed] = useState(false)
   const [iconRouteIndex, setIconRouteIndex] = useState(0)
   const av = className === undefined ? css.av : `${css.av} ${className}`
-  const tile = iconFailed ? null : safeIcon(icon)
+  // Both tiles this component can draw — the catalog's declared icon and the
+  // owner's avatar — are GitHub-hosted, so on an intranet there is nothing to
+  // request and the letter tile below is the whole answer. It is also what
+  // every failing avatar already falls back to, which keeps the grid's
+  // geometry identical to the connected case.
+  const tile = marketOffline() || iconFailed ? null : safeIcon(icon)
   if (tile !== null) {
     // A declared icon is almost always a raw.githubusercontent.com URL, so it
     // goes through the raw route candidates the lightbox uses (#1070) instead
@@ -591,7 +601,7 @@ export function OwnerAvatar({ name, owner, icon, className }: { name: string; ow
       />
     )
   }
-  if (failed || owner === '') {
+  if (failed || owner === '' || marketOffline()) {
     return (
       <div className={av} style={{ background: avatarColor(name) }}>
         {name.replace(/^dsh[-_]/i, '').charAt(0).toUpperCase() || 'P'}
@@ -3016,6 +3026,15 @@ export function MarketSection(props: MarketSectionProps) {
   const [version, setVersionState] = useState<string | null>(() => cachedMarketVersion)
   const setVersion = useCallback(cacheState(value => { cachedMarketVersion = value }, setVersionState), [])
   /**
+   * Intranet mode, as reported by the status route.
+   *
+   * React state as well as the module bit in market-data: the module bit is
+   * what the pure helpers read (avatar routing, screenshot mining), but the
+   * heading needs a re-render to show the badge, and the status answer lands
+   * after the first paint.
+   */
+  const [offline, setOffline] = useState(() => marketOffline())
+  /**
    * The catalog's own build date (#712). The version on a card is the
    * catalog's copy, not a live npm lookup, so a plugin published after the
    * last refresh shows the older number — the tooltip has to say so, or
@@ -3765,6 +3784,10 @@ export function MarketSection(props: MarketSectionProps) {
         // lands later; and if it ever did not, the status poll re-renders
         // within seconds and the images correct themselves.
         applyGithubRouting(status)
+        // Intranet mode, applied before the first card renders so nothing
+        // reaches for an image host this network does not have.
+        setMarketOffline(status.offline === true)
+        setOffline(status.offline === true)
         if (typeof status.boot === 'string') {
           setBootId(status.boot)
           setIgnoredUpdateNames(ignoredUpdatesForBoot(status.boot))
@@ -6866,6 +6889,35 @@ export function MarketSection(props: MarketSectionProps) {
         </label>
       ))
 
+  // Intranet mode: an entry's `url` is a github.com address this network
+  // cannot reach — and for an entry read out of the registry it is
+  // synthesized from the package name, so it may not exist at all. Offering
+  // it as a link offers a click that can only fail; the name is still the
+  // name, and the tooltip still says which plugin this is.
+  const pluginTitleNode = (
+    p: RegistryPlugin,
+    children: ReactNode = pluginName(p.name, p.npm),
+    // The two card layouts show the name as a native tooltip; the compact
+    // Discover tile puts it inside the host Tooltip instead, where a native
+    // one would be a second bubble at the same time.
+    nativeTitle = false,
+  ) => (
+    offline || marketOffline()
+      ? <span className={css.nm} title={p.name}>{children}</span>
+      : (
+        <a
+          className={`${css.nm} ${css.nmLink}`}
+          href={p.url}
+          target="_blank"
+          rel="noreferrer"
+          {...(nativeTitle ? { title: p.name } : {})}
+          aria-label={`${p.name} — ${t('repoLink')}`}
+        >
+          {children}
+        </a>
+      )
+  )
+
   const installAction = (p: RegistryPlugin) => {
     const done = doneUrls.includes(p.url) || hotUrls.includes(p.url)
     const already = isInstalled(p, catalogInstalled, repoIdentities, data?.plugins, repoHints)
@@ -6914,9 +6966,7 @@ export function MarketSection(props: MarketSectionProps) {
           <OwnerAvatar name={p.name} owner={p.owner || ''} icon={p.icon ?? undefined} className={css.recentAv} />
           <div className={css.recentName}>
             <Tooltip label={p.name} side="bottom" maxWidth={320} delayMs={HOVER_TIP_DELAY_MS}>
-              <a className={`${css.nm} ${css.nmLink}`} href={p.url} target="_blank" rel="noreferrer" aria-label={`${p.name} — ${t('repoLink')}`}>
-                {pluginName(p.name, p.npm)}
-              </a>
+              {pluginTitleNode(p)}
             </Tooltip>
           </div>
           {installAction(p)}
@@ -6966,11 +7016,13 @@ export function MarketSection(props: MarketSectionProps) {
               to be just the plugin — and lets two authors ship a plugin of
               the same name without either card needing a qualifier. */}
           <div style={{ minWidth: 0 }}>
-            <a className={`${css.nm} ${css.nmLink}`} href={p.url} target="_blank" rel="noreferrer" title={p.name} aria-label={`${p.name} — ${t('repoLink')}`}>
-              {pluginName(p.name, p.npm)}
-              <GithubRepoMark className={css.repoMark} />
-              {p.deprecated === true && <span className={css.depBadge}>{t('deprecatedBadge')}</span>}
-            </a>
+            {pluginTitleNode(p, (
+              <>
+                {pluginName(p.name, p.npm)}
+                <GithubRepoMark className={css.repoMark} />
+                {p.deprecated === true && <span className={css.depBadge}>{t('deprecatedBadge')}</span>}
+              </>
+            ), true)}
             <div className={css.byline}>
               <OwnerAvatar name={p.name} owner={p.owner || ''} icon={p.icon ?? undefined} />
               <span className={css.owner} title={p.owner}>{p.owner}</span>
@@ -7024,9 +7076,14 @@ export function MarketSection(props: MarketSectionProps) {
               own line, splitting one card's footer into two visual rows. */}
           <span className={css.footActions}>
             {renderFavoriteControl(p.url)}
-            <button type="button" className={css.commentsLink} onClick={() => setCommentsFor(p)}>
-              {t('comments')}
-            </button>
+            {/* Comments are a GitHub Discussions embed (giscus). On an
+                intranet the iframe's script cannot load at all, so the link
+                is not offered rather than opening a dialog that stays empty. */}
+            {!marketOffline() && (
+              <button type="button" className={css.commentsLink} onClick={() => setCommentsFor(p)}>
+                {t('comments')}
+              </button>
+            )}
             {renderPluginMenu(p, menuKey)}
           </span>
         </div>
@@ -7082,10 +7139,12 @@ export function MarketSection(props: MarketSectionProps) {
         <div className={css.themeCardBody}>
           <div className={css.themeCardHead}>
             <div className={css.themeIdentity}>
-              <a className={`${css.nm} ${css.nmLink}`} href={p.url} target="_blank" rel="noreferrer" title={p.name} aria-label={`${p.name} — ${t('repoLink')}`}>
-                {pluginName(p.name, p.npm)}
-                <GithubRepoMark className={css.repoMark} />
-              </a>
+              {pluginTitleNode(p, (
+                <>
+                  {pluginName(p.name, p.npm)}
+                  <GithubRepoMark className={css.repoMark} />
+                </>
+              ), true)}
               <div className={css.byline}>
                 <OwnerAvatar name={p.name} owner={p.owner || ''} icon={p.icon ?? undefined} />
                 <span className={css.owner} title={p.owner}>{p.owner}</span>
@@ -7484,10 +7543,17 @@ export function MarketSection(props: MarketSectionProps) {
           <div className={css.titleActions}>
           {/* A quiet pointer back to the project — most visitors reach the
               market through a client that embeds it, with no other way to
-              find the repo it came from. */}
-          <a className={css.repoLink} href="https://github.com/dsh-market/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
-          {version !== null && <span className={css.version} title={t('versionHint')}>v{version}</span>}
-          <a className={css.submitLink} href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
+              find the repo it came from. Both links are public internet, so
+              an intranet deployment gets the mode badge in their place. */}
+          {offline
+            ? <span className={css.version} title={t('offlineHint')}>{t('offlineBadge')}</span>
+            : (
+              <>
+                <a className={css.repoLink} href="https://github.com/dsh-market/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
+                {version !== null && <span className={css.version} title={t('versionHint')}>v{version}</span>}
+                <a className={css.submitLink} href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
+              </>
+            )}
           {exportLogButton}
           {batchActions}
           </div>

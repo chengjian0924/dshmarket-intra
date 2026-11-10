@@ -4,10 +4,12 @@
  * behind it any more.
  */
 
+import { readFile } from 'node:fs/promises'
 import { BODY_STALL_TIMEOUT_MS, HEADERS_TIMEOUT_MS, readBodyWhileProgressing } from './body-progress.ts'
 import { logEvent } from './log.ts'
 import { configuredProxy, marketFetch } from './net.ts'
 import { catalogFromPackage } from './catalog-npm.ts'
+import { catalogFromRegistry } from './catalog-registry.ts'
 import { activeRegion, catalogSourcesFor, routesFor, type CatalogSource, type Region } from './regions.ts'
 import { NPM_NAME_RE } from './sources.ts'
 
@@ -208,7 +210,10 @@ let served: {
 
 /** Identity of a catalog source, for scoping the validator to its origin. */
 function sourceKey(source: CatalogSource): string {
-  return source.kind === 'npm' ? `npm:${source.registry}/${source.pkg}` : `url:${source.url}`
+  if (source.kind === 'npm') return `npm:${source.registry}/${source.pkg}`
+  if (source.kind === 'file') return `file:${source.path}`
+  if (source.kind === 'registry') return `registry:${source.registry}`
+  return `url:${source.url}`
 }
 
 /** A parsed catalog, or a thrown explanation of why it is not one. */
@@ -300,7 +305,14 @@ export async function loadRegistry(region: Region = activeRegion()): Promise<Reg
     // transiently often enough that one retry is worth more than the second
     // or two it costs — and with nothing behind this call any more, a
     // transient failure is a market with no plugins in it.
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // A file has no failure worth retrying: a missing path or a malformed
+    // document is the same answer a second later, and the operator needs the
+    // message rather than another attempt. A registry read is the same kind
+    // of answer — the per-package reads already tolerate a single bad entry,
+    // so what fails here is discovery or the registry itself, and re-walking
+    // every package would only double the load rather than fix it.
+    const maxAttempts = source.kind === 'file' || source.kind === 'registry' ? 1 : 2
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       attempts += 1
       try {
         // A validator only ever goes back to the source that issued it.
@@ -317,6 +329,38 @@ export async function loadRegistry(region: Region = activeRegion()): Promise<Reg
           const parsed = asRegistry(data)
           served = { key, etag: null, modified: null, version, data: parsed }
           return servedBy(parsed)
+        }
+        // A catalog on this machine, read fresh every time for the same
+        // reason the networked sources are: the operator's sync job may have
+        // just replaced it, and answering from memory would keep publishing
+        // yesterday's listing.
+        if (source.kind === 'file') {
+          let text: string
+          try {
+            text = await readFile(source.path, 'utf8')
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code ?? 'unreadable'
+            throw new Error(`cannot read the catalog file ${source.path} (${code})`)
+          }
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(text)
+          } catch (error) {
+            throw new Error(`the catalog file ${source.path} is not JSON: ${error instanceof Error ? error.message : String(error)}`)
+          }
+          const data = asRegistry(parsed)
+          served = { key, etag: null, modified: null, version: null, data }
+          return servedBy(data)
+        }
+        // The registry as the listing. Read on every load for the same reason
+        // the file is: a plugin published this morning is precisely what this
+        // source exists to show, and an answer from memory would report it as
+        // absent. `catalogFromRegistry` has already validated the shape it
+        // emits, so this result goes straight through.
+        if (source.kind === 'registry') {
+          const data = await catalogFromRegistry(source.registry, source.names)
+          served = { key, etag: null, modified: null, version: null, data }
+          return servedBy(data)
         }
         // ETag first: it is exact, while a date has one-second resolution and
         // a catalog republished twice within the same second would validate

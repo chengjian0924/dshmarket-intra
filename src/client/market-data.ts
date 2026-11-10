@@ -287,6 +287,17 @@ export interface DrainHistoryWire {
 export interface MarketStatus {
   /** The market's own version — rendered in the heading so screenshots carry it. */
   version?: string
+  /**
+   * Intranet mode (composition `offline: true`).
+   *
+   * Only ever drives what the page ASKS FOR. A request the server would
+   * refuse is still refused there; this flag stops the page from asking, so
+   * the unreachable hosts show up as "not available here" instead of as
+   * broken images and a comment thread that never loads.
+   */
+  offline?: boolean
+  /** The catalog sources in force, as readable locations (display only). */
+  catalog?: string[]
   /** Whether the profile package manager owns the market dependency. */
   selfManaged?: boolean
   /** Legacy single prefix for browser bundles predating githubRoutes. */
@@ -1168,6 +1179,26 @@ export function resetGithubRouting(): void {
   preferredGithubRoutes.clear()
 }
 
+/**
+ * Intranet mode, as the server reported it.
+ *
+ * A module-level bit rather than a React context because the three consumers
+ * are not in one tree: the avatar tile, the screenshot strip and the comment
+ * link each render from a different branch of a 9000-line section, and the
+ * value only ever arrives once per page load from the status poll.
+ */
+let offlineMarket = false
+
+/** Record the server's answer. Idempotent; safe to call on every poll. */
+export function setMarketOffline(value: boolean): void {
+  offlineMarket = value
+}
+
+/** Whether this market runs on a network with no public internet. */
+export function marketOffline(): boolean {
+  return offlineMarket
+}
+
 /** `url` through the first candidate for its host, retained for compatibility. */
 export function githubUrl(url: string): string {
   const service: ClientGithubService = url.includes('avatars.githubusercontent.com') ? 'avatar' : 'raw'
@@ -1506,6 +1537,11 @@ export function resetScreenshotsCache(): void {
  * present, otherwise lazily extracted and semantically ranked from README.
  */
 export function pluginScreenshotCandidates(plugin: RegistryPlugin): Promise<ScreenshotCandidate[]> {
+  // Every screenshot this page can show — curated by the catalog or mined out
+  // of a README — is hosted on GitHub, which an intranet deployment cannot
+  // reach. Asking anyway costs a request per image per card and ends in
+  // broken tiles, so on that network the strip is simply absent.
+  if (marketOffline()) return Promise.resolve([])
   const refused: ScreenshotRejection[] = []
   const curated = safeScreenshots(plugin.screenshots, { onReject: rejection => { refused.push(rejection) } })
   if (refused.length > 0) warnRefusedCuratedScreenshots(plugin, refused)

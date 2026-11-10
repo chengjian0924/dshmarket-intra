@@ -266,6 +266,8 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			setSelfRemovedHint: "重启 DeepSeek Harness 后完全清理。",
 			setSelfFailed: "操作失败",
 			versionHint: "插件市场版本 — 反馈问题时请附上",
+			offlineBadge: "内网离线",
+			offlineHint: "内网离线模式：只从内部 npm 源安装插件，目录由运维提供。评论、截图与 GitHub 链接不可用。",
 			subtitle: "发现社区为 DeepSeek Harness 开发的插件",
 			submitPlugin: "申请收录插件 ↗",
 			descExpand: "展开",
@@ -1061,6 +1063,8 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			setSelfRemovedHint: "Restart DeepSeek Harness to finish cleaning up.",
 			setSelfFailed: "The operation failed",
 			versionHint: "Plugin market version — include it when reporting an issue",
+			offlineBadge: "Intranet",
+			offlineHint: "Intranet mode: plugins install from the internal npm registry and the catalog is the one your operators publish. Comments, screenshots and GitHub links are unavailable here.",
 			subtitle: "Discover community plugins for DeepSeek Harness",
 			submitPlugin: "Submit a plugin ↗",
 			descExpand: "Show more",
@@ -1855,6 +1859,8 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			setSelfRemovedHint: "DeepSeek Harness を再起動すると完全にクリーンアップされます。",
 			setSelfFailed: "操作に失敗しました",
 			versionHint: "プラグインマーケットのバージョン — 問題を報告するときに添えてください",
+			offlineBadge: "イントラネット",
+			offlineHint: "イントラネットモード：プラグインは社内 npm レジストリからインストールし、カタログは管理者が配布したものを使用します。コメント、スクリーンショット、GitHub リンクは利用できません。",
 			subtitle: "DeepSeek Harness のためにコミュニティが開発したプラグインを見つけましょう",
 			submitPlugin: "プラグインの収録を申請 ↗",
 			descExpand: "展開",
@@ -3388,6 +3394,23 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			preferredGithubRoutes.set(service, proxy);
 		}
 		/**
+		* Intranet mode, as the server reported it.
+		*
+		* A module-level bit rather than a React context because the three consumers
+		* are not in one tree: the avatar tile, the screenshot strip and the comment
+		* link each render from a different branch of a 9000-line section, and the
+		* value only ever arrives once per page load from the status poll.
+		*/
+		let offlineMarket = false;
+		/** Record the server's answer. Idempotent; safe to call on every poll. */
+		function setMarketOffline(value) {
+			offlineMarket = value;
+		}
+		/** Whether this market runs on a network with no public internet. */
+		function marketOffline() {
+			return offlineMarket;
+		}
+		/**
 		* Image hosts screenshots may load from (#61) — GitHub's own hosting only.
 		* Any other host is dropped BEFORE an <img> is created: a screenshot URL is
 		* a request carrying the user's IP, so registry data and README content are
@@ -3657,6 +3680,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 		* present, otherwise lazily extracted and semantically ranked from README.
 		*/
 		function pluginScreenshotCandidates(plugin) {
+			if (marketOffline()) return Promise.resolve([]);
 			const refused = [];
 			const curated = safeScreenshots(plugin.screenshots, { onReject: (rejection) => {
 				refused.push(rejection);
@@ -8262,6 +8286,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 		*/
 		function GithubRoutedImg({ src, alt, className, key }) {
 			const [routeIndex, setRouteIndex] = (0, react.useState)(0);
+			if (marketOffline()) return null;
 			const candidates = githubRouteCandidates("raw", src);
 			const candidate = candidates[Math.min(routeIndex, candidates.length - 1)];
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
@@ -8362,7 +8387,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			const [iconFailed, setIconFailed] = (0, react.useState)(false);
 			const [iconRouteIndex, setIconRouteIndex] = (0, react.useState)(0);
 			const av = className === void 0 ? Market_module_css_default.av : `${Market_module_css_default.av} ${className}`;
-			const tile = iconFailed ? null : safeIcon(icon);
+			const tile = marketOffline() || iconFailed ? null : safeIcon(icon);
 			if (tile !== null) {
 				const candidates = githubRouteCandidates("raw", tile);
 				const candidate = candidates[Math.min(iconRouteIndex, candidates.length - 1)];
@@ -8380,7 +8405,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					}
 				});
 			}
-			if (failed || owner === "") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			if (failed || owner === "" || marketOffline()) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: av,
 				style: { background: avatarColor(name) },
 				children: name.replace(/^dsh[-_]/i, "").charAt(0).toUpperCase() || "P"
@@ -10627,6 +10652,15 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				cachedMarketVersion = value;
 			}, setVersionState), []);
 			/**
+			* Intranet mode, as reported by the status route.
+			*
+			* React state as well as the module bit in market-data: the module bit is
+			* what the pure helpers read (avatar routing, screenshot mining), but the
+			* heading needs a re-render to show the badge, and the status answer lands
+			* after the first paint.
+			*/
+			const [offline, setOffline] = (0, react.useState)(() => marketOffline());
+			/**
 			* The catalog's own build date (#712). The version on a card is the
 			* catalog's copy, not a live npm lookup, so a plugin published after the
 			* last refresh shows the older number — the tooltip has to say so, or
@@ -11319,6 +11353,8 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					restoreDrainMarkers(status);
 					setEnvReady(status.pnpm !== false);
 					applyGithubRouting(status);
+					setMarketOffline(status.offline === true);
+					setOffline(status.offline === true);
 					if (typeof status.boot === "string") {
 						setBootId(status.boot);
 						setIgnoredUpdateNames(ignoredUpdatesForBoot(status.boot));
@@ -14215,6 +14251,19 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					onChange: (event) => opts.onChange(event.target.checked)
 				}), opts.label]
 			});
+			const pluginTitleNode = (p, children = pluginName(p.name, p.npm), nativeTitle = false) => offline || marketOffline() ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: Market_module_css_default.nm,
+				title: p.name,
+				children
+			}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+				className: `${Market_module_css_default.nm} ${Market_module_css_default.nmLink}`,
+				href: p.url,
+				target: "_blank",
+				rel: "noreferrer",
+				...nativeTitle ? { title: p.name } : {},
+				"aria-label": `${p.name} — ${t("repoLink")}`,
+				children
+			});
 			const installAction = (p) => {
 				const done = doneUrls.includes(p.url) || hotUrls.includes(p.url);
 				const already = isInstalled(p, catalogInstalled, repoIdentities, data?.plugins, repoHints);
@@ -14275,14 +14324,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 									side: "bottom",
 									maxWidth: 320,
 									delayMs: HOVER_TIP_DELAY_MS,
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
-										className: `${Market_module_css_default.nm} ${Market_module_css_default.nmLink}`,
-										href: p.url,
-										target: "_blank",
-										rel: "noreferrer",
-										"aria-label": `${p.name} — ${t("repoLink")}`,
-										children: pluginName(p.name, p.npm)
-									})
+									children: pluginTitleNode(p)
 								})
 							}),
 							installAction(p)
@@ -14321,22 +14363,14 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									style: { minWidth: 0 },
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("a", {
-										className: `${Market_module_css_default.nm} ${Market_module_css_default.nmLink}`,
-										href: p.url,
-										target: "_blank",
-										rel: "noreferrer",
-										title: p.name,
-										"aria-label": `${p.name} — ${t("repoLink")}`,
-										children: [
-											pluginName(p.name, p.npm),
-											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(GithubRepoMark, { className: Market_module_css_default.repoMark }),
-											p.deprecated === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-												className: Market_module_css_default.depBadge,
-												children: t("deprecatedBadge")
-											})
-										]
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									children: [pluginTitleNode(p, /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+										pluginName(p.name, p.npm),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(GithubRepoMark, { className: Market_module_css_default.repoMark }),
+										p.deprecated === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: Market_module_css_default.depBadge,
+											children: t("deprecatedBadge")
+										})
+									] }), true), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: Market_module_css_default.byline,
 										children: [
 											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(OwnerAvatar, {
@@ -14409,7 +14443,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 								className: Market_module_css_default.footActions,
 								children: [
 									renderFavoriteControl(p.url),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									!marketOffline() && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										className: Market_module_css_default.commentsLink,
 										onClick: () => setCommentsFor(p),
@@ -14479,15 +14513,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 								children: [
 									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: Market_module_css_default.themeIdentity,
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("a", {
-											className: `${Market_module_css_default.nm} ${Market_module_css_default.nmLink}`,
-											href: p.url,
-											target: "_blank",
-											rel: "noreferrer",
-											title: p.name,
-											"aria-label": `${p.name} — ${t("repoLink")}`,
-											children: [pluginName(p.name, p.npm), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(GithubRepoMark, { className: Market_module_css_default.repoMark })]
-										}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										children: [pluginTitleNode(p, /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [pluginName(p.name, p.npm), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(GithubRepoMark, { className: Market_module_css_default.repoMark })] }), true), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 											className: Market_module_css_default.byline,
 											children: [
 												/* @__PURE__ */ (0, react_jsx_runtime.jsx)(OwnerAvatar, {
@@ -14918,26 +14944,32 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									className: Market_module_css_default.titleActions,
 									children: [
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
-											className: Market_module_css_default.repoLink,
-											href: "https://github.com/dsh-market/dsh-market",
-											target: "_blank",
-											rel: "noreferrer",
-											title: "dsh-market · GitHub",
-											children: "dsh-market"
-										}),
-										version !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										offline ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 											className: Market_module_css_default.version,
-											title: t("versionHint"),
-											children: ["v", version]
-										}),
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
-											className: Market_module_css_default.submitLink,
-											href: "https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md",
-											target: "_blank",
-											rel: "noreferrer",
-											children: t("submitPlugin")
-										}),
+											title: t("offlineHint"),
+											children: t("offlineBadge")
+										}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+												className: Market_module_css_default.repoLink,
+												href: "https://github.com/dsh-market/dsh-market",
+												target: "_blank",
+												rel: "noreferrer",
+												title: "dsh-market · GitHub",
+												children: "dsh-market"
+											}),
+											version !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+												className: Market_module_css_default.version,
+												title: t("versionHint"),
+												children: ["v", version]
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+												className: Market_module_css_default.submitLink,
+												href: "https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md",
+												target: "_blank",
+												rel: "noreferrer",
+												children: t("submitPlugin")
+											})
+										] }),
 										exportLogButton,
 										batchActions
 									]
@@ -17919,6 +17951,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				githubProxyCustom: typeof body.githubProxyCustom === "string" ? body.githubProxyCustom : null,
 				githubProxyManaged: body.githubProxyManaged === true,
 				selfManaged: body.selfManaged !== false,
+				offline: body.offline === true,
 				selfUninstallReachable: body.selfUninstallReachable !== false,
 				buildEnv: body.buildEnv ?? {}
 			};
@@ -18038,6 +18071,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 							githubProxyCustom: null,
 							githubProxyManaged: false,
 							selfManaged: true,
+							offline: false,
 							selfUninstallReachable: true,
 							buildEnv: {}
 						});
@@ -18325,7 +18359,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				id: advancedId,
 				className: Market_module_css_default.setAdvancedBody
 			}, entryRows.map((node, index) => (0, react.createElement)(react.Fragment, { key: index }, node))) : null) : null;
-			const body = phase === "removed" ? row(t("setSelfRemoved"), t("setSelfRemovedHint"), null) : (0, react.createElement)(react.Fragment, null, advanced, row(t("setIndexSource"), t("setIndexSourceHint"), null), status?.selfManaged === true ? row((update?.updateAvailable === true || update?.hostManaged === true) && update.latest !== null ? `${t("setSelfUpdateReady")} ${update.latest}` : update?.channelSwitch != null ? `${t("setChannelSwitch")} ${update.channelSwitch}` : t("setSelfUpToDate"), phase === "updated" ? t("setSelfUpdatedHint") : update?.channelSwitch != null ? t("setChannelSwitchHint") : update?.updateAvailable === true ? t("setSelfUpdateHint") : update?.hostManaged === true && update.latest !== null ? t("setSelfHostManagedHint") : t("setSelfUpToDateHint"), phase === "updated" ? null : update?.updateAvailable === true ? (0, react.createElement)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+			const body = phase === "removed" ? row(t("setSelfRemoved"), t("setSelfRemovedHint"), null) : (0, react.createElement)(react.Fragment, null, advanced, status?.offline === true ? null : row(t("setIndexSource"), t("setIndexSourceHint"), null), status?.selfManaged === true ? row((update?.updateAvailable === true || update?.hostManaged === true) && update.latest !== null ? `${t("setSelfUpdateReady")} ${update.latest}` : update?.channelSwitch != null ? `${t("setChannelSwitch")} ${update.channelSwitch}` : t("setSelfUpToDate"), phase === "updated" ? t("setSelfUpdatedHint") : update?.channelSwitch != null ? t("setChannelSwitchHint") : update?.updateAvailable === true ? t("setSelfUpdateHint") : update?.hostManaged === true && update.latest !== null ? t("setSelfHostManagedHint") : t("setSelfUpToDateHint"), phase === "updated" ? null : update?.updateAvailable === true ? (0, react.createElement)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 				variant: "primary",
 				size: "sm",
 				disabled: busy,
@@ -18357,7 +18391,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				onClick: () => {
 					onChannel(id);
 				}
-			}, t(CHANNEL_LABEL[id]))))) : null, row(t("setRegion"), status?.regionAuto === true ? `${t(REGION_HINT[status.region])} ${t("setRegionAuto")}` : t(REGION_HINT[status?.region ?? "global"]), (0, react.createElement)("div", { className: Market_module_css_default.setSeg }, (status?.regions ?? REGIONS).map((id) => (0, react.createElement)("button", {
+			}, t(CHANNEL_LABEL[id]))))) : null, status?.offline === true ? null : row(t("setRegion"), status?.regionAuto === true ? `${t(REGION_HINT[status.region])} ${t("setRegionAuto")}` : t(REGION_HINT[status?.region ?? "global"]), (0, react.createElement)("div", { className: Market_module_css_default.setSeg }, (status?.regions ?? REGIONS).map((id) => (0, react.createElement)("button", {
 				key: id,
 				type: "button",
 				className: status?.region === id ? `${Market_module_css_default.setSegBtn} ${Market_module_css_default.setSegOn}` : Market_module_css_default.setSegBtn,
@@ -18365,7 +18399,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				onClick: () => {
 					onRegion(id);
 				}
-			}, t(REGION_LABEL[id]))))), row(t("setGithubProxy"), status?.githubProxyManaged === true ? t("setGithubProxyManagedHint") : status?.githubProxyCustom !== null && status?.githubProxyCustom !== void 0 ? t("setGithubProxyCustomHint") : t("setGithubProxyAutoHint"), status?.githubProxyManaged === true ? null : status?.githubProxyCustom !== null && status?.githubProxyCustom !== void 0 ? (0, react.createElement)("div", { className: Market_module_css_default.setInlineActions }, (0, react.createElement)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+			}, t(REGION_LABEL[id]))))), status?.offline === true ? null : row(t("setGithubProxy"), status?.githubProxyManaged === true ? t("setGithubProxyManagedHint") : status?.githubProxyCustom !== null && status?.githubProxyCustom !== void 0 ? t("setGithubProxyCustomHint") : t("setGithubProxyAutoHint"), status?.githubProxyManaged === true ? null : status?.githubProxyCustom !== null && status?.githubProxyCustom !== void 0 ? (0, react.createElement)("div", { className: Market_module_css_default.setInlineActions }, (0, react.createElement)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 				variant: "outline",
 				size: "sm",
 				disabled: proxySaving,

@@ -26,6 +26,7 @@ import { dshHostInfo, findDshInstallDir } from './dsh-install.ts'
 import { catalogReleaseManifest, deriveHostCompatibility, DiscoveryManifestIndex, findCompatibleVersion } from './discovery-compatibility.ts'
 import { configurePersistentLog, exportLogs, logEvent, readPersistentLog } from './log.ts'
 import { marketFetch } from './net.ts'
+import { offlineMode, offlineReachable, setOfflineMode } from './offline.ts'
 import { catalogReleaseSourceOf, publishedReleaseUpdate, type CatalogReleaseSource } from './release-updates.ts'
 import { diagnosePackageManifests } from './diagnostics.ts'
 import {
@@ -51,8 +52,9 @@ import { failureDetail, groupConflictsByOwner, installApplied, isHostPortCollisi
 import { classifyPnpmFailure } from './pnpm-compat.ts'
 import { asChannel, CHANNELS, DIST_TAG, resolveChannel, type Channel } from './channels.ts'
 import {
-  asRegion, githubProxyManaged, normalizeGithubProxy, REGIONS, routesFor, setActiveRegion,
-  setCustomGithubProxy, type Region,
+  asRegion, githubProxyManaged, normalizeCatalogSource, normalizeGithubProxy, normalizeNpmRegistry, OFFLINE_DEFAULT_REGISTRY,
+  REGIONS, routesFor, setActiveRegion, setConfiguredCatalog, setConfiguredNpmRegistry, setConfiguredPlugins,
+  setCustomGithubProxy, type CatalogSource, type Region,
 } from './regions.ts'
 import { resolveRegion } from './region-probe.ts'
 import { acceleratedTarget, resolveHeadCommit } from './accelerate.ts'
@@ -101,6 +103,34 @@ function isGitHubReleaseTarballSpec(spec: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Why an install cannot happen on this network, or null when it can.
+ *
+ * Intranet mode does not narrow the catalog: the operator's own listing is
+ * the catalog, and it may legitimately include a plugin whose only published
+ * artifact is a GitHub release. What it narrows is the transport — a registry
+ * name is installed from `npmRegistry`, a tarball URL from wherever the
+ * catalog points, and nothing else has a host this network can reach.
+ *
+ * Judged by the target pnpm would be given, not by the entry's `url`: an
+ * entry whose `npm` field is set installs from the registry even though its
+ * catalog URL is a GitHub repository, and refusing that would take away the
+ * exact plugins an operator took the trouble to republish.
+ */
+export function offlineInstallRefusal(target: string): string | null {
+  if (!offlineMode()) return null
+  // A registry name. pnpm resolves it against npmRegistry, which this
+  // deployment serves itself.
+  if (NPM_NAME_RE.test(target)) return null
+  // Anything else has to be a URL this network reaches — an internal tarball
+  // mirror, or a `file:` path the operator staged on the machine.
+  if (/^(?:https?|file):\/\//i.test(target) && offlineReachable(target)) return null
+  return '离线模式下无法从该来源安装：该插件只提供 GitHub 源码或 Release 包，内网访问不到 GitHub。'
+    + ' 请把它发布到内网 npm 源（或准备一个内网可访问的 tarball），在目录条目里填好 `npm` 字段后重试。'
+    + ' / Offline mode: this plugin installs from a GitHub source or release archive, which this network cannot reach.'
+    + ' Publish it to the internal registry (or stage a tarball the intranet serves), set the entry\'s `npm` field, and try again.'
 }
 
 export interface WebServerService {
@@ -169,6 +199,56 @@ export interface MarketConfig {
   channel?: Channel
   /** Which mirrors every outbound request uses; undefined until decided. */
   region?: Region
+  /**
+   * An npm registry the operator's own network serves — an internal mirror,
+   * Verdaccio, Nexus — or undefined to use the region's own table.
+   *
+   * The region table's two entries are npm itself and a public mirror, and an
+   * internal network reaches neither. This is how that network says "packages
+   * come from here", and it moves every registry request with it: catalog,
+   * latest/version lookups, tarball downloads, the self-update spec, and the
+   * registry a spawned pnpm is given. Ignored when it is not a plain http(s)
+   * base URL; `DSHM_NPM_MIRROR` outranks it.
+   */
+  npmRegistry?: string
+  /**
+   * Intranet deployment: this network serves its own packages and reaches
+   * nothing else.
+   *
+   * Everything the market does that needs the public internet — the catalog
+   * origin, README and screenshot images, release manifests, giscus
+   * comments, Gist backups — becomes unreachable, and the difference this
+   * flag makes is whether that shows up as a fifteen-second timeout per
+   * request or as one immediate, explanatory failure. Off, nothing changes.
+   *
+   * It does NOT stop installs: those go to `npmRegistry`, which on this
+   * deployment is the point. It does refuse a plugin whose only source is
+   * GitHub, because no configuration can make that install succeed here and
+   * a pnpm that hangs for fifteen minutes is the worst way to find out.
+   */
+  offline?: boolean
+  /**
+   * Where the catalog is, when it is not the public one — an intranet URL or
+   * a path to a `plugins.json` on this machine (`file://` also accepted).
+   *
+   * This is the single most important setting in an air-gapped deployment:
+   * with it, the market lists what the operator published; without it, the
+   * market only knows the public catalog it cannot reach. Defaults to the
+   * registry's own `dsh-plugin-catalog` package when that is enough.
+   */
+  catalog?: string
+  /**
+   * The packages that are plugins, when the market should not decide.
+   *
+   * Only read when the catalog is the registry itself (`offline` with no
+   * `catalog`): every other catalog source states what it holds. Without
+   * this the registry is filtered by the `dsh` field in each package's
+   * manifest — the marker every plugin carries and no library does. Name the
+   * list here for a deployment whose plugins predate that marker, or to fix
+   * the order they appear in. Stating it also disables the filter: the
+   * operator's list is a statement, not a hint.
+   */
+  plugins?: string[]
   /** Snapshots retained per profile (issue #98); defaults to DEFAULT_MAX_SNAPSHOTS. */
   maxSnapshots?: number
   /**
@@ -197,6 +277,26 @@ export interface MarketConfig {
      */
     launcherNow: () => string
   }
+}
+
+/**
+ * A catalog location as a human reads it — for the boot log and the status
+ * payload, never for routing.
+ *
+ * The distinction matters in a bug report from an intranet deployment: "the
+ * catalog is /opt/dsh/plugins.json" and "the catalog is a package on
+ * http://npm.corp" fail for entirely different reasons, and the operator
+ * cannot tell which one this process is using from a page that just says
+ * "catalog unavailable".
+ */
+export function describeCatalogSource(source: CatalogSource): string {
+  if (source.kind === 'file') return source.path
+  if (source.kind === 'npm') return `${source.registry}/${source.pkg}`
+  // Named as the registry plus what it is being asked for, so the log line
+  // does not read like a package URL: this source reads a listing, not a
+  // document, and the two fail for different reasons.
+  if (source.kind === 'registry') return `${source.registry} (as a plugin listing)`
+  return source.url
 }
 
 /**
@@ -699,6 +799,45 @@ export function mountMarketRoutes(
   const composedBuildEnv = config.buildEnv
   if (marketState.buildEnv !== undefined) config.buildEnv = marketState.buildEnv
 
+  // The npm registry the operator's network serves, when they named one.
+  //
+  // Applied before anything reads a route, because it is not one setting among
+  // several: every later request — the catalog first — is built by appending
+  // to this base. Dropping an unparseable value instead of refusing to boot is
+  // deliberate; a typo should cost the operator their registry, not the market.
+  const pinnedRegistry = normalizeNpmRegistry(config.npmRegistry)
+  if (config.npmRegistry !== undefined && pinnedRegistry === null) {
+    logEvent('warn', 'region', `ignored npmRegistry "${String(config.npmRegistry)}" — it must be an http(s) base URL with no credentials, query, or fragment`)
+  }
+  setConfiguredNpmRegistry(pinnedRegistry)
+
+  // The catalog the operator named, for the same reason and by the same rule:
+  // an intranet deployment's plugin list is not the public one, and there is
+  // no route from here to the public one.
+  const pinnedCatalog = normalizeCatalogSource(config.catalog)
+  if (config.catalog !== undefined && pinnedCatalog === null) {
+    logEvent('warn', 'region', `ignored catalog "${String(config.catalog)}" — it must be an http(s) URL or a path to a plugins.json`)
+  }
+  setConfiguredCatalog(pinnedCatalog)
+  setConfiguredPlugins(config.plugins)
+
+  // Intranet mode, switched on before any route can be read so the very
+  // first catalog request is already fenced. The hosts it must let through
+  // are the two the operator pointed at: everything else this market knows
+  // by name is a public host on a network that has none.
+  const offlinePins = [
+    ...(pinnedRegistry === null ? [] : [new URL(pinnedRegistry).hostname]),
+    ...(pinnedCatalog?.kind === 'url' ? [new URL(pinnedCatalog.url).hostname] : []),
+  ]
+  setOfflineMode(config.offline === true, offlinePins)
+  if (config.offline === true) {
+    // The registry line names the address actually in force: with nothing
+    // configured it is the offline bundle's own loopback port, and saying
+    // "(region default)" there would send the operator looking for a mirror
+    // that this network does not have.
+    logEvent('info', 'region', `offline mode: public hosts are unreachable; registry ${pinnedRegistry ?? OFFLINE_DEFAULT_REGISTRY}, catalog ${pinnedCatalog === null ? `the registry itself${config.plugins === undefined ? '' : ` (${String(config.plugins.length)} named plugins)`}` : describeCatalogSource(pinnedCatalog)}`)
+  }
+
   // The download region: which mirrors every outbound request uses.
   //
   // `global` until something decides otherwise, so nothing waits on the
@@ -722,7 +861,15 @@ export function mountMarketRoutes(
   // profile has answered the question the probe exists to ask, and measuring
   // over the top of that answer would quietly override a deliberate choice a
   // few seconds after boot.
-  if (config.region === undefined) {
+  //
+  // A pinned registry answers it too, more completely: the probe races the two
+  // regions' registries, and when the operator named one both regions are that
+  // same registry — so the race measures nothing, and the document it asks for
+  // (`dshmarket/latest`) is a package an internal mirror may not carry, which
+  // turns a meaningless measurement into a failed one. The region left at
+  // `global` is the right answer for such a network anyway: it is the table
+  // with no public GitHub proxy in front of the git routes.
+  if (config.region === undefined && pinnedRegistry === null && config.offline !== true) {
     void resolveRegion(undefined).then(({ region: probed }) => {
       // A manual choice made while the probe was pending, or a replacement
       // mount created after this one was disposed, owns the region now.
@@ -4584,6 +4731,13 @@ export function mountMarketRoutes(
           githubRoutes: routesFor(region).githubRoutes,
           githubProxyCustom: marketState.githubProxy ?? null,
           githubProxyManaged: githubProxyManaged(),
+          // Intranet mode, and what it means for this page. The client uses
+          // `offline` to stop asking for things that cannot arrive — README
+          // images, avatars, the comment thread — instead of rendering a
+          // stream of broken images and a spinner that never resolves. Both
+          // fields are display-only; the server's own fence is in net.ts.
+          offline: offlineMode(),
+          catalog: routesFor(region).catalog.map(describeCatalogSource),
           // Whether the region was decided by the network check rather than
           // by the user — the card explains a choice it made on their behalf
           // exactly once, so nobody has to wonder why downloads moved.
@@ -7675,6 +7829,16 @@ sendJson(response, 200, { updates })
             const plainTarget = installTargetFor(entry)
             if (plainTarget === null) {
               sendJson(response, 400, { error: 'unsupported source url' })
+              return
+            }
+            // On an intranet, a GitHub install is not slow — it is
+            // impossible, and pnpm would spend its full timeout proving it
+            // while the user watches a progress bar. Refused here, where the
+            // message can name the fix.
+            const offlineRefusal = offlineInstallRefusal(plainTarget)
+            if (offlineRefusal !== null) {
+              logEvent('warn', 'install-rejected', `offline mode: ${entry.name} installs from ${plainTarget.slice(0, 120)}`)
+              sendJson(response, 400, { error: offlineRefusal, code: 'offline-source' })
               return
             }
             // A bare registry name hands the choice of version to pnpm, and

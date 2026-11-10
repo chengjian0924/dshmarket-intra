@@ -87,6 +87,22 @@ export const nodeBinDir = dirname(nodeExecutable())
  * reads `npm_config_noproxy` and a host excluding its own registry mirror
  * must keep excluding it.
  */
+/**
+ * The host of a registry URL when it addresses this machine, else null.
+ *
+ * The intranet bundle serves its registry on `127.0.0.1:<port>`, and a port
+ * that moves is still this machine — hence the whole `127.0.0.0/8` block.
+ */
+function loopbackHostOf(registry: string): string | null {
+  try {
+    const host = new URL(registry).hostname.toLowerCase().replace(/^\[|\]$/gu, '')
+    if (host === 'localhost' || host === '::1' || host.endsWith('.localhost')) return host
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u.test(host) ? host : null
+  } catch {
+    return null
+  }
+}
+
 export function proxyEnvForPnpm(env: NodeJS.ProcessEnv = process.env, region: Region = 'global'): NodeJS.ProcessEnv {
   const has = (name: string): boolean => {
     const wanted = name.toLowerCase()
@@ -154,6 +170,26 @@ export function proxyEnvForPnpm(env: NodeJS.ProcessEnv = process.env, region: Re
     // value recognizable to anyone reading the spawned process's env.
     out.npm_config_registry = `${mirror}/`
     out.PNPM_CONFIG_REGISTRY = `${mirror}/`
+  }
+  // A registry on this machine is not behind this machine's proxy.
+  //
+  // Same fact as the loopback bypass in `net.ts`, on the side that does the
+  // actual downloading: pnpm reads `npm_config_proxy` (translated above from
+  // the standard variables) and would send every tarball request for
+  // `127.0.0.1:4873` through a proxy that is entitled to refuse a CONNECT to
+  // loopback — the failure reads as "the registry is down" while the
+  // registry is one process away. Added to whatever exclusion list the
+  // operator already has rather than replacing it.
+  if (mirror !== DEFAULT_NPM_REGISTRY) {
+    const loopback = loopbackHostOf(mirror)
+    if (loopback !== null) {
+      const existing = pick('npm_config_noproxy') ?? stdNoProxy ?? ''
+      const entries = existing.split(',').map(entry => entry.trim()).filter(entry => entry !== '')
+      for (const entry of [loopback, 'localhost']) {
+        if (!entries.some(other => other.toLowerCase() === entry)) entries.push(entry)
+      }
+      out.npm_config_noproxy = entries.join(',')
+    }
   }
   return out
 }
