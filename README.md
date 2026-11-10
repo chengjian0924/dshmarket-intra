@@ -64,6 +64,22 @@ against primitives that are not there — if the Plugin Market entry never
 appears, that is usually why. Worth checking when a desktop build bundles
 its own dsh: it may be older than the one `npm` would give you (#139).
 
+## Intranet / offline deployment
+
+On a machine with no public internet, the market would otherwise spend a 15-second timeout on every host it knows — catalog, screenshots, GitHub release notes, comments. One switch turns that into a working installation:
+
+```yaml
+- id: dsh-market
+  name: dshmarket
+  config:
+    offline: true                            # public hosts fail fast; the UI closes the same doors
+    npmRegistry: http://npm.intra.corp/      # the registry this network serves
+```
+
+Under `offline: true` the registry **is** the catalog: every package in it that declares a `dsh` field is listed, so publishing a plugin is what puts it on the shelf and there is no second file to keep in sync. Reach for `catalog:` (a local file or an intranet URL) or `plugins: [...]` (an explicit list) only when the listing has to be curated. On a host that composes through a patch layer — dsh's desktop profile does — these entries belong in `cordis.patch.yml` rather than `cordis.yml`.
+
+Run `node scripts/offline-bundle.mjs --out ./bundle --target http://npm.intra.corp/` on the connected side to get a `plugins.json` holding only installable entries, every tarball, and a generated `publish.sh`. Full steps, the feature matrix and troubleshooting: [OFFLINE.md](OFFLINE.md) (Chinese).
+
 ## What you get
 
 - **Browse & search** the full community catalog (4200+ plugins, growing daily) — category filters, star counts, top/new sorting, bilingual descriptions that follow your UI language

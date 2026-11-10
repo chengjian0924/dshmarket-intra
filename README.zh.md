@@ -55,6 +55,22 @@ profile，因此不会出现在桌面端。请通过应用内的 **设置 → �
 控制台说明原因，而不是拿缺失的原语去渲染——如果哪里都没出现「插件市场」这
 一项，通常就是这个原因。桌面端要留意：它可能内置了比 `npm` 装到的更旧的 dsh（#139）。
 
+## 内网 / 离线部署
+
+没有公网出口的机器上，市场默认会到处超时——目录、截图、GitHub 发行说明、评论，每一项都是一次 15 秒。下面这一个开关把它变回正常功能：
+
+```yaml
+- id: dsh-market
+  name: dshmarket
+  config:
+    offline: true                            # 内网模式：合上公网出口，界面同步收口
+    npmRegistry: http://npm.intra.corp/      # 内网 npm 源
+```
+
+`offline: true` 下**源就是目录**：源里带 `dsh` 字段的包自动成为可安装条目，发布插件就是上架，不需要再维护第二份清单。只有当列表需要人工筛选时，才用 `catalog:`（本地文件或内网地址）或 `plugins: [...]`（显式名单）。宿主如果走补丁层（dsh 桌面端的 profile 就是），这段配置写进 `cordis.patch.yml`，不是 `cordis.yml`。
+
+联网侧跑一次 `node scripts/offline-bundle.mjs --out ./bundle --target http://npm.intra.corp/`，就能拿到只含可安装条目的 `plugins.json`、全部 tarball 和一份 `publish.sh`。完整步骤、功能对照表和排错见 [OFFLINE.md](OFFLINE.md)。
+
 ## 你会得到
 
 - **逛与搜**——完整社区目录（4200+ 插件，每天在涨），分类筛选、star 数、最热/最新排序，中英描述跟随界面语言
