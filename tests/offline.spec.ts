@@ -13,7 +13,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   OfflineHostError, offlineBlockedHost, offlineMode, offlineReachable, setOfflineMode,
@@ -199,14 +199,15 @@ describe('normalizeCatalogSource', () => {
 
   it('reads everything else as a path on this machine', () => {
     // Absolute either way, but not spelled the same: a bare path is resolved
-    // against the working directory (`D:\opt\...` on Windows), while a file
-    // URL is decoded into a rooted path with no drive (`\opt\...`). Both open
-    // the same file, so the expectation is computed rather than pinned to the
-    // slash the test runner happens to use.
-    expect(normalizeCatalogSource('/opt/dsh/plugins.json')).toEqual({ kind: 'file', path: resolve('/opt/dsh/plugins.json') })
+    // against the working directory (`D:\opt\...` on Windows), so the
+    // expectation is computed rather than pinned to one platform's slash.
+    const absolute = resolve('/opt/dsh/plugins.json')
+    expect(normalizeCatalogSource('/opt/dsh/plugins.json')).toEqual({ kind: 'file', path: absolute })
     expect(normalizeCatalogSource('./plugins.json')).toEqual({ kind: 'file', path: join(process.cwd(), 'plugins.json') })
-    expect(normalizeCatalogSource('file:///opt/dsh/plugins.json'))
-      .toEqual({ kind: 'file', path: fileURLToPath('file:///opt/dsh/plugins.json') })
+    // The same file written as a URL, in the form this platform writes one.
+    // `file:///opt/...` is not usable on Windows — `fileURLToPath` refuses a
+    // local URL without a drive — and the source is nil rather than wrong.
+    expect(normalizeCatalogSource(pathToFileURL(absolute).href)).toEqual({ kind: 'file', path: absolute })
   })
 
   it('refuses what it cannot use, so boot reports a bad value instead of failing later', () => {
