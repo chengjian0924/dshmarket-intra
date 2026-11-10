@@ -70,15 +70,34 @@ if (typeof icon !== 'string' || icon.trim() === '') {
  * one came back the next time a lock was refreshed behind a mirror. Nothing
  * about running `npm install` in China makes this visible locally, so the
  * guard belongs where the package is built rather than in anyone's habits.
+ *
+ * The one host that is not foreign is the one this package is published TO.
+ * An internal-registry build (`publishConfig.registry` on an intranet) has a
+ * lockfile that resolves there by construction, and its consumers install
+ * from that same registry — the failure above cannot happen to them, because
+ * the mirror IS their registry. Judged against the manifest rather than
+ * against a list of blessed mirrors: the question is "will this lockfile's
+ * URLs resolve for whoever installs it", and the package's own publish target
+ * is the only fact in the repository that answers it.
  */
+const publishHost = (() => {
+  const registry = manifest.publishConfig?.registry
+  if (typeof registry !== 'string' || registry === '') return null
+  try {
+    return new URL(registry).origin
+  } catch {
+    return null
+  }
+})()
+
 const lock = fs.readFileSync('package-lock.json', 'utf8')
 const foreign = [...new Set(
   [...lock.matchAll(/"resolved": "(https?:\/\/[^/"]+)/g)]
     .map(match => match[1])
-    .filter(host => host !== 'https://registry.npmjs.org'),
+    .filter(host => host !== 'https://registry.npmjs.org' && host !== publishHost),
 )]
 if (foreign.length > 0) {
-  failures.push(`package-lock.json resolves to ${foreign.join(', ')} — rewrite to https://registry.npmjs.org or consumers hit EALLOWREMOTE`)
+  failures.push(`package-lock.json resolves to ${foreign.join(', ')} — rewrite to https://registry.npmjs.org or to this package's own publishConfig.registry, or consumers hit EALLOWREMOTE`)
 }
 
 if (failures.length > 0) {

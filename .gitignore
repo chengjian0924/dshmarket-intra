@@ -11,6 +11,16 @@ npm-cache/
 docs/
 data/readmes-snapshot.json
 
+# Local scratch from the offline-mode work: staged bundles, staged tarballs and
+# the throwaway directories the offline-bundle script and its probes write.
+.scratch/
+run-*/
+
+# A checkout can be pointed at a private registry through a local .npmrc; that
+# file names one machine's registry and must not travel with the repository.
+.npmrc
+.workbuddy/
+
 # Generated when a local build enables sourcemaps; never committed (#533).
 client/*.map
 
