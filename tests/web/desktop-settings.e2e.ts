@@ -18,6 +18,33 @@ describe.skipIf(!dshAvailable())('host dispatches the market settings card (#516
   }, 300_000)
   afterAll(async () => { await browser?.close(); await scaffold?.close() })
 
+  /**
+   * The card has rendered, and it shows the region row only when this
+   * deployment has a region to choose.
+   *
+   * `Download region` and the GitHub-proxy row pick between PUBLIC routes, so
+   * an intranet composition — `offline: true`, which the internal build bakes
+   * into its bundle patch — withholds them: every choice they offer is
+   * unreachable on that network, and a control that changes nothing reads as a
+   * setting that failed to apply. Asserting the label unconditionally would
+   * test the deployment instead of the card; on that lane the honest assertion
+   * is the other one, that the card rendered and does not offer it.
+   *
+   * Which lane this is comes from the route, never from the label's absence:
+   * a card that has not painted yet looks exactly like a trimmed one.
+   */
+  async function waitCard(page: Page): Promise<void> {
+    await page.getByText(/^(Update channel|更新通道|Download region|下载区域)$/).first()
+      .waitFor({ timeout: 30_000 })
+    const status = await (await scaffold.api('/dsh-market/status')).json() as { offline?: boolean }
+    const region = page.getByText(/^(Download region|下载区域)$/)
+    if (status.offline === true) {
+      await expect(region.count()).resolves.toBe(0)
+      return
+    }
+    await region.waitFor({ timeout: 20_000 })
+  }
+
   async function checkCard(page: Page, mode: 'web' | 'desktop') {
     const console = watchConsole(page)
     await openMarketPage(page, scaffold)
@@ -40,7 +67,7 @@ describe.skipIf(!dshAvailable())('host dispatches the market settings card (#516
       await entry.waitFor({ timeout: 20_000 })
       await entry.click()
       await page.getByText(/^(Update channel|更新通道)$/).waitFor({ timeout: 15_000 })
-      await page.getByText(/^(Download region|下载区域)$/).waitFor({ timeout: 15_000 })
+      await waitCard(page)
       const shot = process.env.DSHM_SETTINGS_ARTIFACTS
       if (shot) await page.screenshot({ path: join(shot, `${mode}-card.png`) })
       // Back to the market's own page: on this line Settings lives in the
@@ -75,7 +102,7 @@ describe.skipIf(!dshAvailable())('host dispatches the market settings card (#516
       await card.waitFor({ timeout: 15_000 })
       expect(await card.count()).toBe(1)
       await card.click()
-      await page.getByText(/^(下载区域|Download region)$/).waitFor()
+      await waitCard(page)
       const shot = process.env.DSHM_SETTINGS_ARTIFACTS
       if (shot) await card.locator('..').screenshot({ path: join(shot, `${mode}-card.png`) })
     } else {
@@ -98,7 +125,7 @@ describe.skipIf(!dshAvailable())('host dispatches the market settings card (#516
       await entry.waitFor({ timeout: 20_000 })
       await entry.click()
       await page.getByText(/^(Update channel|更新通道)$/).waitFor({ timeout: 15_000 })
-      await page.getByText(/^(Download region|下载区域)$/).waitFor({ timeout: 15_000 })
+      await waitCard(page)
       const shot = process.env.DSHM_SETTINGS_ARTIFACTS
       if (shot) await page.screenshot({ path: join(shot, `${mode}-card.png`) })
       // Back to the market's own page for the assertion every host shares.

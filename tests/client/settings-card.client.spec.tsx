@@ -30,6 +30,7 @@ function stubFetch(options: {
   region?: string; regionAuto?: boolean; regionError?: string; githubProxy?: string | null
   githubProxyCustom?: string | null; githubProxyManaged?: boolean; githubProxyError?: string
   buildEnv?: Record<string, string>; buildEnvError?: string
+  offline?: boolean
 } = {}): void {
   calls = []
   let githubProxyCustom = options.githubProxyCustom ?? null
@@ -56,6 +57,7 @@ function stubFetch(options: {
         githubProxyCustom,
         githubProxyManaged: options.githubProxyManaged === true,
         selfManaged: options.selfManaged !== false,
+        offline: options.offline === true,
         buildEnv: options.buildEnv ?? {},
       })
     }
@@ -126,6 +128,24 @@ describe('SettingsCard', () => {
     await open()
     await waitFor(() => { expect(screen.getByText(/v1\.12\.2/)).toBeTruthy() })
   })
+
+  it('withholds the rows whose only choices are public routes on an intranet', async () => {
+    // `offline: true` (the internal build's bundle patch). Region, GitHub
+    // proxy and the index-source address all pick between PUBLIC routes this
+    // network does not have, so the card drops them rather than offering
+    // controls that cannot change anything. The channel row stays: it selects
+    // which build of the market arrives, not where it comes from.
+    //
+    // This is the rule the desktop-settings e2e lane now branches on, so it is
+    // pinned here where it costs a millisecond instead of a host boot.
+    stubFetch({ offline: true })
+    await open()
+    await waitFor(() => { expect(screen.getByText(t('setChannel'), { selector: 'div' })).toBeTruthy() })
+    expect(screen.queryByText(t('setRegion'), { selector: 'div' })).toBeNull()
+    expect(screen.queryByText(t('setGithubProxy'), { selector: 'div' })).toBeNull()
+    expect(screen.queryByText(t('setIndexSource'), { selector: 'div' })).toBeNull()
+  })
+
 
   it('keeps host-provided installations out of profile package controls', async () => {
     stubFetch({ selfManaged: false, latest: '1.13.0' })
