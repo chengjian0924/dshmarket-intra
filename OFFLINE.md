@@ -44,7 +44,7 @@
 
 判定"是不是插件"用的是 `package.json` 里的 `dsh` 字段——每个 DSH 插件都有，普通库都没有（内网包里 13 个插件全有，它们的依赖全没有）。`keywords` 不作判据：有几个插件 `keywords` 是空的，按关键字过滤会把它们藏起来。
 
-读源需要"这个源有哪些包"。市场按顺序试三个标准端点：`/-/v1/search`、`/-/all`、`/-/ping`（最后这个是我们离线包里快照服务器的约定，返回 `selection.plugins`）。**你的源至少要答一个**：Verdaccio、Nexus、cnpm 都答前两个；`njcb-harness/tooling/offline-plugins/serve.mjs` 已补齐前两个。
+读源需要"这个源有哪些包"。市场按顺序试三个标准端点：`/-/v1/search`、`/-/all`、`/-/ping`（最后这个是我们离线包里快照服务器的约定，返回 `selection.plugins`）。**你的源至少要答一个**：Verdaccio、Nexus、cnpm 都答前两个；随离线包附带的 `serve.mjs` 已补齐前两个。
 
 ---
 
@@ -118,7 +118,7 @@ install -D -m 0644 ../plugins.json /opt/dsh/market/plugins.json
 # 3. 配置（见文首），然后重启 dsh
 ```
 
-如果源是 `njcb-harness/tooling/offline-plugins` 里那个只读快照服务器（`serve.mjs`），它没有 `npm publish` 接口——往里面加插件的办法是把 `.tgz` 或 `.zip` 拖到同目录的 `Add-plugin.cmd` 上（zip 会被重新打包成 tarball）。它会写 `registry.json` 和 `tarballs/`，并重算 `SHA256SUMS.txt`；`serve.mjs` 每次请求发现 `registry.json` 变了就重新读，所以**不用重启源窗口**，刷新市场页面即可。
+如果源是随离线包附带的那个只读快照服务器（`serve.mjs`），它没有 `npm publish` 接口——往里面加插件的办法是把 `.tgz` 或 `.zip` 拖到同目录的 `Add-plugin.cmd` 上（zip 会被重新打包成 tarball）。它会写 `registry.json` 和 `tarballs/`，并重算 `SHA256SUMS.txt`；`serve.mjs` 每次请求发现 `registry.json` 变了就重新读，所以**不用重启源窗口**，刷新市场页面即可。
 
 验证：
 
