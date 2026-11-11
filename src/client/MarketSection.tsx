@@ -7544,16 +7544,18 @@ export function MarketSection(props: MarketSectionProps) {
           {/* A quiet pointer back to the project — most visitors reach the
               market through a client that embeds it, with no other way to
               find the repo it came from. Both links are public internet, so
-              an intranet deployment gets the mode badge in their place. */}
-          {offline
-            ? <span className={css.version} title={t('offlineHint')}>{t('offlineBadge')}</span>
-            : (
-              <>
-                <a className={css.repoLink} href="https://github.com/dsh-market/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
-                {version !== null && <span className={css.version} title={t('versionHint')}>v{version}</span>}
-                <a className={css.submitLink} href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
-              </>
-            )}
+              an intranet deployment gets the mode badge in their place.
+              The badge replaces the LINKS, never the version: there the
+              version names the pinned internal build, which is the one fact
+              a support screenshot of this page has to carry. */}
+          {offline && <span className={css.offlineBadge} title={t('offlineHint')}>{t('offlineBadge')}</span>}
+          {!offline && (
+            <a className={css.repoLink} href="https://github.com/dsh-market/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
+          )}
+          {version !== null && <span className={css.version} title={t('versionHint')}>v{version}</span>}
+          {!offline && (
+            <a className={css.submitLink} href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
+          )}
           {exportLogButton}
           {batchActions}
           </div>

@@ -555,6 +555,11 @@
    version — most reports arrive as a photo of the screen. Selectable
    (not user-select:none) so it can also be copied into an issue. */
 .version{font-size:12px;line-height:20px;color:var(--dsw-alias-label-tertiary,#8b93a1);font-variant-numeric:tabular-nums;flex-shrink:0}
+/* Intranet mode marker. A chip rather than a bare word so it does not read
+   as a second version string beside the real one — the deployment still
+   shows WHICH build this network pins, and the badge only says how it
+   installs. */
+.offlineBadge{font-size:11px;line-height:18px;padding:0 6px;border:1px solid var(--dsw-alias-border-l2,#e3e6eb);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#f4f6f8);color:var(--dsw-alias-label-secondary,#5b6472);flex-shrink:0;white-space:nowrap}
 .repoLink{font-size:12px;line-height:20px;color:var(--dsw-alias-label-tertiary,#8b93a1);text-decoration:none;flex-shrink:0}
 .repoLink:hover{color:var(--dsw-alias-brand-primary,#4f6ef7)}
 /* The note row (#347). The user's own text reads as theirs — slightly

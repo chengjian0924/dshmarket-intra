@@ -10727,3 +10727,26 @@ describe('a compatible release still inside the release-age wait (#945)', () => 
     expect((offered as HTMLButtonElement).disabled).toBe(false)
   })
 })
+
+describe('intranet mode header', () => {
+  it('keeps the build version beside the mode badge', async () => {
+    // The internal build ships a bundle patch with `offline: true` (#…), so
+    // the header swaps the public links for the mode badge. The version must
+    // survive that swap: on an intranet it names the pinned internal build,
+    // and a screenshot without it cannot say which one a user is running.
+    stubFetch({
+      '/dsh-market/status': {
+        active: false, pnpm: true, boot: 'boot-1', restart: true,
+        offline: true, version: '1.73.18-intra.3',
+      },
+    })
+    const { container } = render(<MarketSection {...props()} />)
+    const head = container.querySelector('[class*="headTop"]') as HTMLElement | null
+    expect(head).not.toBeNull()
+    const badge = await within(head!).findByText(en.offlineBadge)
+    expect(badge.className).toContain('offlineBadge')
+    expect(within(head!).getByText('v1.73.18-intra.3')).toBeTruthy()
+    // What intranet mode removes is the public-internet links, not the version.
+    expect(head!.querySelector('a[href*="github.com"]')).toBeNull()
+  })
+})

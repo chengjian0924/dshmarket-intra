@@ -138,6 +138,15 @@ describe.skipIf(!HAS_DSH)('web e2e: plugin market', () => {
     const version = page.locator('[class*="headTop"] [class*="version"]')
     await version.waitFor({ state: 'visible', timeout: 30_000 })
     expect((await version.textContent())?.trim()).toMatch(/^v\d+\.\d+\.\d+/)
+    // Intranet mode (a bundle patch with `offline: true`, which the internal
+    // build ships) swaps the public links for a mode badge. It must NOT swap
+    // out the version with them: on that network the version is the pinned
+    // internal build, so it is the one fact a support photo needs.
+    const badge = page.locator('[class*="headTop"] [class*="offlineBadge"]')
+    if (await badge.count() > 0) {
+      expect((await badge.first().textContent())?.trim()).toMatch(/^(Intranet|内网离线|イントラネット)$/)
+      expect(await page.locator('[class*="headTop"] a[href*="github.com"]').count()).toBe(0)
+    }
   })
 
   it('search and category filter the grid', async () => {
