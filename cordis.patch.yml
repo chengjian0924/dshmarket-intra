@@ -1,4 +1,26 @@
 # dsh bundle patch: inserts this plugin into a profile's layer stack.
+#
+# `offline: true` is part of the entry itself, not of a deployment's own patch
+# layer, so the market is on the intranet the moment it is installed — including
+# when it is installed from the client's "add plugin" dialog, which writes no
+# configuration of its own. `offline` has exactly one reader
+# (`setOfflineMode(config.offline === true, …)` in src/routes.ts) and nothing
+# infers it, so without this the plugin comes up expecting the public catalog
+# and every request fails on a network that has none.
+#
+# An unnamed registry then resolves to OFFLINE_DEFAULT_REGISTRY
+# (http://127.0.0.1:4873, src/regions.ts), the address the snapshot server
+# listens on. A deployment that serves its mirror elsewhere overrides it in the
+# profile's own patch layer, which is applied after this one:
+#
+#   - id: dsh-market
+#     config:
+#       offline: true
+#       npmRegistry: http://10.0.0.9:4873/
+#
+# `config` is replaced wholesale by a later patch, so that row lists both keys.
 - insert:
     - id: dsh-market
       name: 'dshmarket'
+      config:
+        offline: true
